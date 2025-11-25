@@ -1,5 +1,8 @@
-streamlit
+streamlit>=1.20
 pandas
 openpyxl
 xlsxwriter
+xlrd
+python-docx
+
 xlrd
