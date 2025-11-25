@@ -1,9 +1,5 @@
-# app_v21.py
-# Release v2.0.0 - major update:
-# - favorites (收藏题目)
-# - import from .docx (python-docx)
-# - enhanced parsing rules
-# - robustness & bug fixes
+# app_v20.py
+# Small iteration updated from v22: auto-advance, UI layout tidy, favorites & docx support merged into app_v20 file
 
 import streamlit as st
 import pandas as pd
@@ -12,6 +8,8 @@ import re
 import pickle
 import os
 import random
+import time
+import streamlit.components.v1 as components
 
 # optional docx import
 try:
@@ -20,60 +18,52 @@ try:
 except Exception:
     DOCX_AVAILABLE = False
 
-# --- Streamlit config ---
-st.set_page_config(page_title="ZenMode Ultimate v2.0.0", layout="wide", page_icon="🌙", initial_sidebar_state="expanded")
+st.set_page_config(page_title="ZenMode Ultimate v2.0.0 (iter v22)", layout="wide",
+                   page_icon="🌙", initial_sidebar_state="expanded")
 
-# --- CSS (mobile-friendly, high contrast; preserve header for sidebar toggle) ---
+# --- CSS ---
 st.markdown("""
 <style>
     #MainMenu {visibility: hidden;}
-    [data-testid="stHeader"] { background-color: rgba(0,0,0,0); } /* keep header so sidebar toggle works */
+    [data-testid="stHeader"] { background-color: rgba(0,0,0,0); }
     footer {visibility: hidden;}
     .stApp { background-color: #000; color: #fff; }
 
-    .hud-container { display:flex; justify-content:space-between; background:#111; padding:12px 18px; border-radius:10px; border:1px solid #222; margin-bottom:18px; align-items:center;}
+    .hud-container { display:flex; justify-content:space-between; background:#111; padding:12px 18px; border-radius:10px; border:1px solid #222; margin-bottom:16px; align-items:center;}
     .hud-item { color:#cbd5e1; font-weight:600; }
     .hud-value { color:#ffffff; font-weight:800; margin-left:8px; }
     .hud-warn { color:#ff6b6b !important; }
     .hud-accent { color:#00ccff !important; }
 
-    .zen-card { background:#0f1724; padding:28px; border-radius:14px; border:1px solid #1f2937; margin-bottom:18px; }
-    .question-text { color:#fff; font-size:20px; font-weight:600; line-height:1.5; }
+    .zen-card { background:#0f1724; padding:22px; border-radius:12px; border:1px solid #1f2937; margin-bottom:14px; }
+    .question-text { color:#fff; font-size:18px; font-weight:600; line-height:1.5; }
 
-    .tag { display:inline-block; padding:4px 10px; background:#153A8B; color:#fff; border-radius:6px; font-weight:700; }
+    .tag { display:inline-block; padding:4px 8px; background:#153A8B; color:#fff; border-radius:6px; font-weight:700; margin-bottom:8px; }
 
     .stRadio div[role='radiogroup'] > label {
         background:#0b1220; border:1px solid #263044; color:#ffffff !important;
-        padding:14px 16px; border-radius:10px; margin-bottom:10px; font-size:16px !important; white-space: nowrap;
-    }
-    .stRadio div[role='radiogroup'] > label:hover {
-        background:#16202b; border-color:#00ccff; color:#fff !important;
+        padding:12px 14px; border-radius:10px; margin-bottom:8px; font-size:15px !important; white-space: nowrap;
     }
 
     .stCheckbox label, .stCheckbox div, .stCheckbox { color: #FFFFFF !important; }
     .stCheckbox input[type="checkbox"] { accent-color: #00ccff; }
     div[data-baseweb="checkbox"] label { color: #FFFFFF !important; }
 
-    button[kind="primary"] { background-color:#0066FF !important; color:#fff !important; border-radius:10px; height:48px; white-space:nowrap; padding:0 20px; }
+    button[kind="primary"] { background-color:#0066FF !important; color:#fff !important; border-radius:10px; height:44px; white-space:nowrap; padding:0 18px; }
     .stButton>button{white-space:nowrap;}
 
-    .feedback-box { padding:12px; border-radius:8px; margin:12px 0; text-align:center; font-weight:700; }
+    .feedback-box { padding:10px; border-radius:8px; margin:10px 0; text-align:center; font-weight:700; }
     .feedback-success { background:#063; color:#8ef7bf; border:1px solid #059669; }
     .feedback-error { background:#4b0b0b; color:#ffc1c1; border:1px solid #b91c1c; }
 
     .small-meta { color:#9ca3af; font-size:13px; }
-    .muted { color:#9ca3af; font-size:13px; }
 </style>
 """, unsafe_allow_html=True)
 
-DATA_FILE = "user_data_v21.pkl"
-
-# --- Precompile regexes for performance & broader recognition ---
-RE_OPTS_1 = re.compile(r'(^|\s)([A-Z])[.、\)\]:：]\s*(.*?)(?=\s+[A-Z][.、\)\]:：]|$)', re.DOTALL | re.MULTILINE)
-RE_OPTS_2 = re.compile(r'(^|\s)\(?([A-Z])\)[.、\)\]:：]?\s*(.*?)(?=\s+\(?[A-Z]\)?[.、\)\]:：]?|$)', re.DOTALL | re.MULTILINE)
-RE_OPTS_3 = re.compile(r'([A-Z])[.、\)\]:：](.*?)(?=[A-Z][.、\)\]:：]|$)', re.DOTALL | re.MULTILINE)
-
-# answer line patterns
+# --- regex & parsing helpers (same approach as v21) ---
+RE_OPTS_1 = re.compile(r'(^|\s)([A-Z])[.、\)]:：]\s*(.*?)(?=\s+[A-Z][.、\)]:：]|$)', re.DOTALL | re.MULTILINE)
+RE_OPTS_2 = re.compile(r'(^|\s)\(?([A-Z])\)[.、\)]:：]?\s*(.*?)(?=\s+\(?[A-Z]\)?[.、\)]:：]?|$)', re.DOTALL | re.MULTILINE)
+RE_OPTS_3 = re.compile(r'([A-Z])[.、\)]:：](.*?)(?=[A-Z][.、\)]:：]|$)', re.DOTALL | re.MULTILINE)
 RE_ANSWER = re.compile(r'(答案|answer|正确答案|answer:|answer：)\s*[:：]?\s*([A-Z对错TrueFalseABCD]+)', re.IGNORECASE)
 RE_ANSWER_SIMPLE = re.compile(r'^[\s]*(A|B|C|D|A\.|B\.|C\.|D\.|对|错)\s*$', re.IGNORECASE | re.MULTILINE)
 
@@ -81,12 +71,10 @@ def normalize_text(text):
     if text is None: return ""
     return str(text).strip()
 
-# --- parsing helpers (excel + docx) ---
 def parse_options_from_text(text):
     text = normalize_text(text)
     options = {}
     question_text = text
-    # try a series of patterns
     for idx, p in enumerate([RE_OPTS_1, RE_OPTS_2, RE_OPTS_3]):
         matches = list(p.finditer(text))
         if len(matches) >= 2:
@@ -110,24 +98,21 @@ def extract_answer_from_text(text):
     m = RE_ANSWER.search(text)
     if m:
         ans_raw = m.group(2).strip()
-        # normalize common forms
         if ans_raw in ["对", "True", "true"]: return "A"
         if ans_raw in ["错", "False", "false"]: return "B"
-        # take first capital letter
         mm = re.search(r'[A-Z]', ans_raw.upper())
         if mm:
             return mm.group(0)
         return ans_raw.upper()
-    # fallback: find single line that's just A/B/C/D or 对/错
     mm = RE_ANSWER_SIMPLE.search(text)
     if mm:
         token = mm.group(1)
         if token in ["对", "True", "true"]: return "A"
         if token in ["错", "False", "false"]: return "B"
-        return token.replace(".", "").upper()
+        return token.replace('.', '').upper()
     return ""
 
-# --- Excel parsing (cached) ---
+# --- Excel / DOCX parsing (cached for excel) ---
 @st.cache_data(ttl=60*60, show_spinner=False)
 def parse_excel_bytes(file_bytes):
     try:
@@ -139,8 +124,7 @@ def parse_excel_bytes(file_bytes):
     def find_col(cols, kws):
         for c in cols:
             for kw in kws:
-                if kw in c:
-                    return c
+                if kw in c: return c
         return None
 
     col_type = find_col(df.columns, ['类型', 'Type', '题型'])
@@ -159,15 +143,12 @@ def parse_excel_bytes(file_bytes):
         raw_type = normalize_text(row[col_type]).upper()
         raw_content = row[col_content]
         raw_answer = normalize_text(row[col_answer]).upper()
-
         if any(x in raw_type for x in ['AO', '判断']): q_code, q_name = 'AO', '判断题'
         elif any(x in raw_type for x in ['BO', '单选']): q_code, q_name = 'BO', '单选题'
         elif any(x in raw_type for x in ['CO', '多选']): q_code, q_name = 'CO', '多选题'
         else: q_code, q_name = 'UNK', '未知'
-
         q_text, q_options = parse_options_from_text(raw_content)
-        if q_code in ['BO', 'CO'] and not q_options:
-            q_options = {}
+        if q_code in ['BO', 'CO'] and not q_options: q_options = {}
         questions.append({
             "id": i, "code": q_code, "type": q_name,
             "content": q_text, "options": q_options, "answer": raw_answer,
@@ -175,49 +156,35 @@ def parse_excel_bytes(file_bytes):
         })
     return questions
 
-# --- DOCX parsing (try to be robust) ---
 def parse_docx_bytes(file_bytes):
     if not DOCX_AVAILABLE:
         raise RuntimeError("docx 解析依赖缺失，请安装 python-docx (pip install python-docx)")
-
     try:
         doc = Document(io.BytesIO(file_bytes))
     except Exception as e:
         raise RuntimeError(f"读取 docx 失败: {e}")
-
-    # Collect paragraphs text
     paras = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
-    # naive grouping: split by blank line equivalents already removed; try group by markers "1." or "Q" or "题" or "【题】"
-    blocks = []
-    current = []
+    blocks, current = [], []
     for t in paras:
-        # if paragraph looks like start of a new question (leading number or "题" or "Q" or starts with digit+.)
-        if re.match(r'^\d+[\.\、\)]', t) or re.match(r'^(题|Q|Question)', t, re.IGNORECASE):
-            if current:
-                blocks.append("\n".join(current))
+        if re.match(r'^\d+[\.、\)]', t) or re.match(r'^(题|Q|Question)', t, re.IGNORECASE):
+            if current: blocks.append("\n".join(current))
             current = [t]
         else:
             current.append(t)
-    if current:
-        blocks.append("\n".join(current))
-
+    if current: blocks.append("\n".join(current))
     questions = []
     for i, b in enumerate(blocks):
-        # try to find answer indicator inside block
         ans = extract_answer_from_text(b)
         q_text, q_options = parse_options_from_text(b)
-        # guess type by presence of options or "判断"
         if '判断' in b or re.search(r'对|错|True|False', b, re.IGNORECASE):
             q_code, q_name = 'AO', '判断题'
         elif q_options:
-            # decide single vs multi by looking for 多选/选择题 label or answer having multiple letters
             if re.search(r'多选', b) or (ans and len(ans) > 1):
                 q_code, q_name = 'CO', '多选题'
             else:
                 q_code, q_name = 'BO', '单选题'
         else:
             q_code, q_name = 'UNK', '未知'
-
         questions.append({
             "id": i, "code": q_code, "type": q_name,
             "content": q_text, "options": q_options, "answer": ans,
@@ -225,7 +192,8 @@ def parse_docx_bytes(file_bytes):
         })
     return questions
 
-# --- State persistence ---
+# --- state persistence ---
+DATA_FILE = "user_data_v22.pkl"
 def save_state():
     state = {
         "banks": st.session_state.banks,
@@ -255,17 +223,32 @@ def load_state():
             pass
     return False
 
-# --- init ---
+# --- init session_state ---
 if 'init' not in st.session_state:
     st.session_state.banks = {}
     st.session_state.progress = {}
     st.session_state.active_bank = None
     st.session_state.filters = {}
-    st.session_state.favorites = []  # list of question dicts
+    st.session_state.favorites = []
+    st.session_state.show_fav = False
     load_state()
     st.session_state.init = True
 
-# --- Sidebar: controls, import, favorites management ---
+# --- handle client reload auto-advance param ---
+params = st.experimental_get_query_params()
+if params.get("advance") and st.session_state.get("pending_advance") is not None and st.session_state.active_bank:
+    # perform advance once
+    bk_adv = st.session_state.active_bank
+    pg = st.session_state.progress.setdefault(bk_adv, {"history": {}, "wrong": [], "current_idx": 0})
+    pg["current_idx"] = st.session_state.pending_advance
+    # clean-up
+    st.session_state.pending_advance = None
+    save_state()
+    # clear params and rerun to show next question
+    st.experimental_set_query_params()
+    st.experimental_rerun()
+
+# --- Sidebar ---
 with st.sidebar:
     st.header("🛠️ 控制台")
     st.subheader("📚 题库")
@@ -276,11 +259,11 @@ with st.sidebar:
         selected = st.selectbox("切换题库", bank_names, index=curr_idx)
         if selected != st.session_state.active_bank:
             st.session_state.active_bank = selected
-            # reset progress pointer safely if needed
-            if selected not in st.session_state.progress:
-                st.session_state.progress[selected] = {"history": {}, "wrong": [], "current_idx": 0}
+            st.session_state.progress.setdefault(selected, {"history": {}, "wrong": [], "current_idx": 0})
+            st.session_state.filters.setdefault(selected, list({q['type'] for q in st.session_state.banks.get(selected, [])}))
             save_state()
             st.rerun()
+
         curr_q_list = st.session_state.banks.get(st.session_state.active_bank, [])
         all_types = list({q['type'] for q in curr_q_list}) if curr_q_list else []
         default_sel = st.session_state.filters.get(st.session_state.active_bank, all_types)
@@ -313,7 +296,7 @@ with st.sidebar:
     else:
         st.info("暂无题库，先导入一个 Excel 或 Word 文档。")
 
-    # Favorites management
+    # Favorites
     st.markdown("---")
     st.subheader("⭐ 收藏题目")
     fav_count = len(st.session_state.favorites)
@@ -348,7 +331,6 @@ with st.sidebar:
             st.success(f"已创建题库：{new_name}，并切换到该题库。")
             st.rerun()
 
-    # Favorites quick clear
     if fav_count > 0 and st.button("清空收藏", use_container_width=True):
         st.session_state.favorites = []
         save_state()
@@ -356,7 +338,7 @@ with st.sidebar:
         st.rerun()
 
     st.markdown("---")
-    # Import area (Excel + Word)
+    # Import area
     st.subheader("➕ 导入题库")
     uploaded_excel = st.file_uploader("上传 Excel (.xlsx/.xls)", type=["xlsx", "xls"])
     uploaded_docx = st.file_uploader("上传 Word (.docx)", type=["docx"])
@@ -407,42 +389,33 @@ with st.sidebar:
         with st.expander("⚠️ 删除当前题库"):
             if st.button("确认删除当前题库", use_container_width=True):
                 name_del = st.session_state.active_bank
-                if name_del in st.session_state.banks:
-                    del st.session_state.banks[name_del]
-                if name_del in st.session_state.progress:
-                    del st.session_state.progress[name_del]
-                if name_del in st.session_state.filters:
-                    del st.session_state.filters[name_del]
+                if name_del in st.session_state.banks: del st.session_state.banks[name_del]
+                if name_del in st.session_state.progress: del st.session_state.progress[name_del]
+                if name_del in st.session_state.filters: del st.session_state.filters[name_del]
                 st.session_state.active_bank = list(st.session_state.banks.keys())[0] if st.session_state.banks else None
                 save_state()
                 st.success("已删除题库。")
                 st.rerun()
 
-# --- If user requested to view favorites, show modal-like area ---
+# --- show favorites modal if requested ---
 if st.session_state.get("show_fav", False):
     st.markdown("### ⭐ 收藏题目列表")
-    for i, q in enumerate(st.session_state.favorites):
+    for i, q in enumerate(list(st.session_state.favorites)):
         st.markdown(f"**{i+1}. [{q.get('type')}]** {q.get('content')}")
         cols = st.columns([1,1,1])
         if cols[0].button("取消收藏", key=f"unfav_{i}"):
-            st.session_state.favorites.pop(i)
+            st.session_state.favorites = [f for f in st.session_state.favorites if f.get("raw_content") != q.get("raw_content")]
             save_state()
             st.experimental_rerun()
         if cols[1].button("导出此题", key=f"export_fav_{i}"):
-            # single export
-            df = pd.DataFrame([{
-                "题目类型": q.get("type",""),
-                "题目内容": q.get("raw_content", q.get("content","")),
-                "正确答案": q.get("answer",""),
-                "你的误选": q.get("user_answer","")
-            }])
+            df = pd.DataFrame([{ "题目类型": q.get("type",""), "题目内容": q.get("raw_content", q.get("content","")), "正确答案": q.get("answer",""), "你的误选": q.get("user_answer","") }])
             out = io.BytesIO()
             with pd.ExcelWriter(out, engine='xlsxwriter') as writer:
                 df.to_excel(writer, index=False)
             st.download_button("下载", out.getvalue(), f"fav_{i+1}.xlsx")
         if cols[2].button("存为题库", key=f"fav2bank_{i}"):
             new_name = f"fav_{int(random.random()*100000)}"
-            st.session_state.banks[new_name] = [{**q, "user_answer": None} for q in st.session_state.favorites]
+            st.session_state.banks[new_name] = [{**qq, "user_answer": None} for qq in st.session_state.favorites]
             st.session_state.progress[new_name] = {"history": {}, "wrong": [], "current_idx": 0}
             st.session_state.filters[new_name] = list({qq['type'] for qq in st.session_state.banks[new_name]})
             st.session_state.active_bank = new_name
@@ -453,20 +426,18 @@ if st.session_state.get("show_fav", False):
         st.session_state.show_fav = False
         st.experimental_rerun()
 
-# --- Main area: quiz interface (keeps behavior from v20 but with favorites button and robust checks) ---
+# --- Main quiz area ---
 if not st.session_state.active_bank:
-    st.markdown("<div style='text-align:center; padding:80px 0;'><h1>👋 ZenMode Ultimate v2.0.0</h1><p class='small-meta'>请在侧边栏导入题库或选择题库</p></div>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:center; padding:60px 0;'><h1>👋 ZenMode Ultimate</h1><p class='small-meta'>请在侧边栏导入或选择题库</p></div>", unsafe_allow_html=True)
 else:
     bk = st.session_state.active_bank
     full_qs = st.session_state.banks.get(bk, [])
     active_filters = st.session_state.filters.get(bk, list({q['type'] for q in full_qs}))
     if not active_filters:
-        # default to all types
         active_filters = list({q['type'] for q in full_qs})
         st.session_state.filters[bk] = active_filters
 
     qs = [q for q in full_qs if q['type'] in active_filters]
-
     pg = st.session_state.progress.setdefault(bk, {"history": {}, "wrong": [], "current_idx": 0})
     idx = pg.get("current_idx", 0)
     if idx > len(qs):
@@ -481,10 +452,10 @@ else:
     <div class="hud-container">
         <div>
             <div class="hud-item">题库: <span class="hud-value">{bk}</span></div>
-            <div class="muted">筛选：{', '.join(active_filters)}</div>
+            <div class="small-meta">筛选：{', '.join(active_filters)}</div>
         </div>
         <div style="text-align:right;">
-            <div class="hud-item">进度 <span class="hud-value hud-accent">{done_q}</span>/<span class="muted">{total_q}</span></div>
+            <div class="hud-item">进度 <span class="hud-value hud-accent">{done_q}</span>/<span class="small-meta">{total_q}</span></div>
             <div class="hud-item">错题 <span class="hud-value hud-warn">{wrong_q}</span></div>
         </div>
     </div>
@@ -493,7 +464,7 @@ else:
     if total_q == 0:
         st.warning("当前筛选下没有题目，请在侧边栏调整筛选或导入题库。")
     elif idx >= total_q:
-        st.markdown(f"<div style='text-align:center; padding:30px; background:#071223; border-radius:12px;'><h2>🎉 本题库已完成</h2><p class='small-meta'>共 {total_q} 题，错题 {wrong_q} 道</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='text-align:center; padding:20px; background:#071223; border-radius:10px;'><h3>🎉 练习完成</h3><p class='small-meta'>共 {total_q} 题，错题 {wrong_q} 道</p></div>", unsafe_allow_html=True)
         if st.button("🔁 再刷一次", use_container_width=True, type="primary"):
             pg["current_idx"] = 0
             pg["history"] = {}
@@ -501,33 +472,21 @@ else:
             st.rerun()
     else:
         q = qs[idx]
-        st.markdown(f"""
-        <div class="zen-card">
-            <span class="tag">{q.get('type')}</span>
-            <div class="question-text">{q.get('content')}</div>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown(f"""<div class="zen-card"><span class="tag">{q.get('type')}</span><div class="question-text">{q.get('content')}</div></div>""", unsafe_allow_html=True)
 
-        # favorite button
-        fav_col1, fav_col2, fav_col3 = st.columns([1,1,8])
-        if fav_col1.button("⭐ 收藏此题", use_container_width=True):
-            # avoid duplicates by raw_content
+        # favorite controls (compact, unique keys)
+        fav_c1, fav_c2 = st.columns([1,3])
+        if fav_c1.button("⭐ 收藏", key=f"fav_add_{bk}_{idx}", use_container_width=True):
             if not any(fav.get("raw_content") == q.get("raw_content") for fav in st.session_state.favorites):
-                ff = q.copy()
-                ff["user_answer"] = ff.get("user_answer", None)
-                st.session_state.favorites.append(ff)
-                save_state()
-                st.success("已加入收藏")
-                st.experimental_rerun()
+                ff = q.copy(); ff["user_answer"] = ff.get("user_answer", None)
+                st.session_state.favorites.append(ff); save_state(); st.success("已加入收藏"); st.experimental_rerun()
             else:
                 st.info("此题已收藏")
-
-        if fav_col2.button("🔖 取消收藏（若已收藏）", use_container_width=True):
+        if fav_c2.button("🔖 取消收藏", key=f"fav_rem_{bk}_{idx}", use_container_width=True):
             before = len(st.session_state.favorites)
             st.session_state.favorites = [f for f in st.session_state.favorites if f.get("raw_content") != q.get("raw_content")]
             if len(st.session_state.favorites) < before:
-                save_state()
-                st.success("已取消收藏")
+                save_state(); st.success("已取消收藏")
             else:
                 st.info("该题尚未收藏")
 
@@ -536,47 +495,41 @@ else:
         saved = pg["history"].get(idx)
         if q.get("code") == "AO":
             sel_idx = 0 if saved == "A" else (1 if saved == "B" else 0)
-            val = st.radio("判断:", ["A", "B"], index=sel_idx, format_func=lambda x: "✅ 正确" if x=='A' else "❌ 错误", horizontal=True, key=f"{bk}_{idx}")
+            val = st.radio("判断:", ["A", "B"], index=sel_idx, format_func=lambda x: "✅ 正确" if x=='A' else "❌ 错误", horizontal=True, key=f"ans_{bk}_{idx}")
             user_choice = val
         elif q.get("code") == "BO":
             if q.get("options"):
-                keys = list(q["options"].keys())
-                disp = [f"{k}. {v}" for k,v in q["options"].items()]
+                keys = list(q["options"].keys()); disp = [f"{k}. {v}" for k,v in q["options"].items()]
                 sel_idx = keys.index(saved) if saved in keys else 0
-                val = st.radio("选择:", disp, index=sel_idx, key=f"{bk}_{idx}")
+                val = st.radio("选择:", disp, index=sel_idx, key=f"ans_{bk}_{idx}")
                 user_choice = val.split(".")[0] if val else None
             else:
-                user_choice = st.text_input("答案：", value=saved or "", key=f"txt_{bk}_{idx}").strip().upper()
+                user_choice = st.text_input("答案：", value=saved or "", key=f"ans_{bk}_{idx}_text").strip().upper()
         elif q.get("code") == "CO":
             st.write("多项选择：")
             if q.get("options"):
                 sel_list = []
                 for k,v in q["options"].items():
                     checked = (k in saved) if saved else False
-                    if st.checkbox(f"{k}. {v}", value=checked, key=f"{bk}_{idx}_{k}"):
+                    if st.checkbox(f"{k}. {v}", value=checked, key=f"ans_{bk}_{idx}_{k}"):
                         sel_list.append(k)
                 user_choice = "".join(sorted(sel_list)) if sel_list else ""
             else:
-                user_choice = st.text_input("答案：", value=saved or "", key=f"txt_{bk}_{idx}").strip().upper()
+                user_choice = st.text_input("答案：", value=saved or "", key=f"ans_{bk}_{idx}_text").strip().upper()
         else:
-            # unknown: free text
-            user_choice = st.text_input("答案（自由输入）：", value=saved or "", key=f"txt_{bk}_{idx}").strip()
+            user_choice = st.text_input("答案（自由）：", value=saved or "", key=f"ans_{bk}_{idx}_text").strip()
 
-        # feedback placeholder
+        # controls and feedback placeholder
         feedback = st.empty()
-
-        # controls
         c1, c2, c3 = st.columns([1,2,1])
-        if c1.button("⬅ 上一题", disabled=(idx==0), use_container_width=True):
-            pg["current_idx"] = max(0, idx-1)
-            save_state()
-            st.rerun()
+        if c1.button("⬅ 上一题", disabled=(idx==0), key=f"prev_{bk}_{idx}", use_container_width=True):
+            pg["current_idx"] = max(0, idx-1); save_state(); st.rerun()
 
-        if c2.button("提交", type="primary", use_container_width=True):
+        if c2.button("提交", type="primary", key=f"submit_{bk}_{idx}", use_container_width=True):
             if user_choice is None or (isinstance(user_choice, str) and user_choice.strip() == ""):
                 st.warning("请先作答")
             else:
-                # save answer
+                # record answer
                 pg["history"][idx] = user_choice
                 ans = q.get("answer", "")
                 if q.get("code") == "AO":
@@ -587,13 +540,12 @@ else:
                     feedback.markdown(f"""<div class="feedback-box feedback-success">✅ 回答正确！</div>""", unsafe_allow_html=True)
                 else:
                     feedback.markdown(f"""<div class="feedback-box feedback-error">❌ 回答错误。正确答案：<strong>{q.get('answer','')}</strong></div>""", unsafe_allow_html=True)
-                    # add to wrong list if not exists
                     if not any(w.get("raw_content") == q.get("raw_content") for w in pg.get("wrong", [])):
-                        qc = q.copy()
-                        qc["user_answer"] = user_choice
-                        pg.setdefault("wrong", []).append(qc)
+                        qc = q.copy(); qc["user_answer"] = user_choice; pg.setdefault("wrong", []).append(qc)
                 save_state()
-        if c3.button("跳过 ➡", use_container_width=True):
-            pg["current_idx"] = idx + 1
-            save_state()
-            st.rerun()
+                # set pending advance and trigger client reload with param after short delay (JS)
+                st.session_state.pending_advance = idx + 1
+                components.html(f"<script>setTimeout(()=>{{let u=location.pathname + '?advance=1'; location.href=u;}},900);</script>", height=0)
+
+        if c3.button("跳过 ➡", key=f"skip_{bk}_{idx}", use_container_width=True):
+            pg["current_idx"] = idx + 1; save_state(); st.rerun()
